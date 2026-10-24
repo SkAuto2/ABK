@@ -232,6 +232,31 @@ class KernelWorkflowRegressionTests(unittest.TestCase):
         self.assertIn('if [[ "$ABK_ANDROID_VERSION" != "android16"', block)
         self.assertIn('NTsync 基础源码已由 android16-6.12 内核提供', block)
 
+    def test_susfs_missing_header_hunks_are_repaired_idempotently(self):
+        block = self._step_run_block("应用 SUSFS 补丁")
+        code = textwrap.dedent(block.split("# Header hunks can miss", 1)[1].split("python3 - <<'PY'\n", 1)[1].split("\n          PY", 1)[0])
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            task_mmu = root / "fs/proc/task_mmu.c"
+            namespace = root / "fs/namespace.c"
+            task_mmu.parent.mkdir(parents=True)
+            source = '#include "internal.h"\n#ifdef CONFIG_KSU_SUSFS_SUS_MAP\nint hidden = SUSFS_IS_INODE_SUS_MAP(inode);\n#endif\n'
+            task_mmu.write_text(source, encoding="utf-8")
+            namespace.write_text('#include "internal.h"\n#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nint flags = CL_COPY_MNT_NS;\n#endif\n', encoding="utf-8")
+            env = dict(os.environ, PYTHONIOENCODING="utf-8")
+            for _ in range(2):
+                result = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True, encoding="utf-8", env=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            for path in (task_mmu, namespace):
+                self.assertEqual(path.read_text(encoding="utf-8").count("#include <linux/susfs_def.h>"), 1)
+            text = namespace.read_text(encoding="utf-8")
+            self.assertEqual(text.count("#define CL_COPY_MNT_NS BIT(25)"), 1)
+            self.assertIn("extern bool susfs_is_current_ksu_domain(void);", text)
+            self.assertIn("extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;", text)
+            task_mmu.write_text('#include "internal.h"\n', encoding="utf-8")
+            subprocess.run([sys.executable, "-c", code], cwd=root, check=True, capture_output=True, env=env)
+            self.assertEqual(task_mmu.read_text(encoding="utf-8"), '#include "internal.h"\n')
+
     def test_android14_builtin_ntsync_does_not_require_symbol_export(self):
         block = self._step_run_block("应用 NTsync 补丁")
         self.assertNotIn("EXPORT_SYMBOL", block)

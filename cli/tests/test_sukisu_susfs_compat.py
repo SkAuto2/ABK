@@ -1,5 +1,7 @@
-"""Regression tests for SukiSU selinux_hide/SUSFS compatibility patches."""
+"""Regression tests for SukiSU/BakaSU selinux_hide/SUSFS compatibility patches."""
+import ast
 import importlib.util
+import re
 import tempfile
 import textwrap
 import unittest
@@ -88,6 +90,50 @@ class SukiSUSUSFSCompatTests(unittest.TestCase):
 
         self.assertNotIn("fake_state", patched)
         self.assertIn("int ksu_setup_preinit_file(", patched)
+
+
+class BakaSUSUSFSCompatTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        workflow = ROOT / ".github/workflows/build.yml"
+        step = workflow.read_text(encoding="utf-8").split("- name: 修复 BakaSU SUSFS 源码兼容", 1)[1]
+        code = textwrap.dedent(step.split("python3 - <<'PY'\n", 1)[1].split("\n          PY", 1)[0])
+        functions = [node for node in ast.parse(code).body if isinstance(node, ast.FunctionDef)]
+        cls.namespace = {"re": re}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), str(workflow), "exec"), cls.namespace)
+
+    def test_exports_old_and_current_sources_idempotently(self):
+        source = """\
+#include <linux/mutex.h>
+__maybe_static bool ksu_selinux_hide_running __read_mostly = false;
+__maybe_static bool ksu_selinux_hide_enabled __read_mostly = false;
+__maybe_static DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key);
+__maybe_static struct page *fake_status = NULL;
+__maybe_static void initialize_fake_status(void) {}
+static int security_context_to_sid_with_policy(void) { return 0; }
+static int security_sid_to_context_with_policy(void) { return 0; }
+static void security_compute_av_user_with_policy(void) {}
+"""
+        for declaration in ("", "static struct selinux_state fake_state;\n", "__maybe_static struct selinux_state fake_state;\n"):
+            with self.subTest(declaration=declaration), tempfile.TemporaryDirectory() as temp:
+                path = Path(temp) / "selinux_hide.c"
+                path.write_text(declaration + source, encoding="utf-8")
+                patch = self.namespace["patch_bakasu_selinux_hide"]
+                patch(path)
+                patched = path.read_text(encoding="utf-8")
+                if declaration:
+                    self.assertIn("struct selinux_state fake_state;", patched)
+                    self.assertNotRegex(patched, r"(?:static|__maybe_static)\s+struct selinux_state fake_state;")
+                else:
+                    self.assertNotIn("fake_state", patched)
+                self.assertIn("bool ksu_selinux_hide_running __read_mostly = false;", patched)
+                self.assertIn("int security_context_to_sid_with_policy(", patched)
+                patch(path)
+                self.assertEqual(patched, path.read_text(encoding="utf-8"))
+
+                path.write_text(patched.replace("int security_sid_to_context_with_policy", "int removed_helper"), encoding="utf-8")
+                with self.assertRaisesRegex(SystemExit, "security_sid_to_context_with_policy"):
+                    patch(path)
 
 
 if __name__ == "__main__":

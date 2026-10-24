@@ -1595,8 +1595,8 @@ jobs:
                   print(f"Patched BakaSU selinux_hide compatibility exports: {path}")
 
               final_text = path.read_text()
+              # Newer BakaSU removed fake_state; current SUSFS no longer references it.
               required = (
-                  "struct selinux_state fake_state;",
                   "DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key);",
                   "struct page *fake_status = NULL;",
                   "bool ksu_selinux_hide_enabled __read_mostly",
@@ -2684,6 +2684,35 @@ jobs:
                 echo "已修复 exec.c 缺少 susfs_def.h 问题"
               fi
             fi
+
+            # Header hunks can miss on GKI branches without the Android trace hook includes.
+            python3 - <<'PY'
+          from pathlib import Path
+
+          for filename in ("fs/proc/task_mmu.c", "fs/namespace.c"):
+              path = Path(filename)
+              text = path.read_text()
+              if "CONFIG_KSU_SUSFS" not in text:
+                  continue
+              additions = []
+              if "#include <linux/susfs_def.h>" not in text:
+                  additions.append("#ifdef CONFIG_KSU_SUSFS\n#include <linux/susfs_def.h>\n#endif\n")
+              if filename == "fs/namespace.c":
+                  declarations = (
+                      "extern bool susfs_is_current_ksu_domain(void);",
+                      "extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;",
+                      "#define CL_COPY_MNT_NS BIT(25)",
+                  )
+                  missing = [declaration for declaration in declarations if declaration not in text]
+                  if missing:
+                      additions.append("#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n" + "\n".join(missing) + "\n#endif\n")
+              if additions:
+                  anchor = '#include "internal.h"\n'
+                  if anchor not in text:
+                      raise SystemExit(f"无法定位 {path} 的 SUSFS 头部声明插入点")
+                  path.write_text(text.replace(anchor, anchor + "".join(additions), 1))
+                  print(f"已补齐 {path} 的 SUSFS 头部声明")
+          PY
 
             fix_task_mmu_vma_pad_start
           fi

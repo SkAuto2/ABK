@@ -28,6 +28,7 @@ class KernelWorkflowRegressionTests(unittest.TestCase):
         cls.ksu_compat = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.ksu_compat)
 
+    @unittest.skipUnless(os.name != "nt" and shutil.which("bash"), "workflow validation requires POSIX Bash")
     def test_bakasu_latest_kpm_passes_workflow_validation(self):
         block = textwrap.dedent(self._step_run_block("校验自定义内核版本组合"))
         for variant, branch, expected in (
@@ -42,11 +43,11 @@ class KernelWorkflowRegressionTests(unittest.TestCase):
                 inputs = dict(android_version="android13", kernel_version="5.15", sub_level="194",
                               os_patch_level="2025-12", use_kpm="true", ksu_variant=variant, ksu_branch=branch)
                 script = re.sub(r"\$\{\{ inputs\.(\w+) }}", lambda match: inputs[match[1]], block)
-                result = subprocess.run(["bash", "-c", script], text=True, capture_output=True)
+                result = subprocess.run(["bash", "-c", script], encoding="utf-8", capture_output=True)
                 self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
 
     def test_matrix_preserves_supported_kpm_and_password(self):
-        workflow = (ROOT / ".github/workflows/kernel-full-feature-matrix.yml").read_text()
+        workflow = (ROOT / ".github/workflows/kernel-full-feature-matrix.yml").read_text(encoding="utf-8")
         expressions = re.findall(
             r"(?m)^\s*(MATRIX_EFFECTIVE_USE_KPM|MATRIX_EFFECTIVE_KPM_PASSWORD|use_kpm|kpm_password|KPM_PASSWORD|USE_KPM): \$\{\{ (.+?) }}$",
             workflow,

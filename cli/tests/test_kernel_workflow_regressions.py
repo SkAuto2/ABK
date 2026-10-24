@@ -10,6 +10,7 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -26,6 +27,46 @@ class KernelWorkflowRegressionTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("ensure_ksu_compat", KSU_COMPAT_PATH)
         cls.ksu_compat = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.ksu_compat)
+
+    def test_bakasu_latest_kpm_passes_workflow_validation(self):
+        block = textwrap.dedent(self._step_run_block("校验自定义内核版本组合"))
+        for variant, branch, expected in (
+            ("BakaSU", "Stable(标准)", 0),
+            ("BakaSU", "Latest(最新)", 0),
+            ("BakaSU", "Custom(自定义)", 0),
+            ("BakaSU", "Dev(开发)", 1),
+            ("SukiSU", "Latest(最新)", 0),
+            ("Official", "Latest(最新)", 1),
+        ):
+            with self.subTest(variant=variant, branch=branch):
+                inputs = dict(android_version="android13", kernel_version="5.15", sub_level="194",
+                              os_patch_level="2025-12", use_kpm="true", ksu_variant=variant, ksu_branch=branch)
+                script = re.sub(r"\$\{\{ inputs\.(\w+) }}", lambda match: inputs[match[1]], block)
+                result = subprocess.run(["bash", "-c", script], text=True, capture_output=True)
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+
+    def test_matrix_preserves_supported_kpm_and_password(self):
+        workflow = (ROOT / ".github/workflows/kernel-full-feature-matrix.yml").read_text()
+        expressions = re.findall(
+            r"(?m)^\s*(MATRIX_EFFECTIVE_USE_KPM|MATRIX_EFFECTIVE_KPM_PASSWORD|use_kpm|kpm_password|KPM_PASSWORD|USE_KPM): \$\{\{ (.+?) }}$",
+            workflow,
+        )
+        self.assertEqual(len(expressions), 6)
+        for variant in ("BakaSU", "SukiSU", "Official"):
+            for branch in ("Stable(标准)", "Latest(最新)", "Custom(自定义)", "Dev(开发)"):
+                for enabled in (False, True):
+                    for password in ("", "test-password"):
+                        inputs = SimpleNamespace(kernelsu_variant=variant, kernelsu_branch=branch,
+                                                 use_kpm=enabled, kpm_password=password)
+                        allowed = enabled and (variant == "SukiSU" or (variant == "BakaSU" and branch != "Dev(开发)"))
+                        for name, expression in expressions:
+                            with self.subTest(variant=variant, branch=branch, enabled=enabled, name=name):
+                                result = eval(expression.replace("&&", " and ").replace("||", " or "),
+                                              {"__builtins__": {}}, {"inputs": inputs})
+                                expected = password if allowed else ""
+                                if "PASSWORD" not in name.upper():
+                                    expected = allowed
+                                self.assertEqual(result, expected)
 
     def test_sukisu_setup_accepts_resolved_bare_sha(self):
         block = self._step_run_block("添加 KernelSU")

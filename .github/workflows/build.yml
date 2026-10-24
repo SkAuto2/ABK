@@ -288,8 +288,8 @@ jobs:
 
           if [ "${{ inputs.use_kpm }}" = "true" ] \
             && [ "${{ inputs.ksu_variant }}" = "BakaSU" ] \
-            && { [ "${{ inputs.ksu_branch }}" = "Dev(开发)" ] || [ "${{ inputs.ksu_branch }}" = "Latest(最新)" ]; }; then
-            echo "::error::BakaSU 仅 Stable(标准) / Custom(自定义) 支持 KPM，请切换分支或关闭 KPM。"
+            && [ "${{ inputs.ksu_branch }}" = "Dev(开发)" ]; then
+            echo "::error::BakaSU KPM 请使用 Stable(标准) / Latest(最新) / Custom(自定义)。"
             exit 1
           fi
 
